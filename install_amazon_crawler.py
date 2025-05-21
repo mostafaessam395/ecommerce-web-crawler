@@ -20,7 +20,10 @@ def install_dependencies():
         "langdetect",
         "pycountry",
         "scipy",
-        "requests"
+        "requests",
+        "graphistry>=0.28.0",
+        "streamlit-echarts>=0.4.0",
+        "streamlit-apexjs>=0.0.3"
     ]
 
     # Install Python packages
