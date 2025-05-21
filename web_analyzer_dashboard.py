@@ -331,18 +331,65 @@ with debug_expander:
 # Try to load the data files
 try:
     if os.path.exists(products_file) and os.path.getsize(products_file) > 0:
-        products_df = pd.read_csv(products_file)
-        debug_expander.write(f"Loaded {len(products_df)} products")
+        try:
+            # Try to read with standard settings first
+            products_df = pd.read_csv(products_file)
+            debug_expander.write(f"Loaded {len(products_df)} products with standard settings")
+        except Exception as e1:
+            debug_expander.write(f"Standard CSV reading failed: {str(e1)}")
+            try:
+                # Try with more robust error handling
+                products_df = pd.read_csv(
+                    products_file,
+                    error_bad_lines=False,  # Skip bad lines
+                    warn_bad_lines=True,    # Warn about bad lines
+                    quoting=1,              # Quote all fields
+                    escapechar='\\',        # Use backslash as escape character
+                    on_bad_lines='skip'     # Skip bad lines (pandas 1.3+)
+                )
+                debug_expander.write(f"Loaded {len(products_df)} products with robust settings")
+            except Exception as e2:
+                debug_expander.write(f"Robust CSV reading also failed: {str(e2)}")
+                # Last resort: read the file manually
+                try:
+                    import csv
+                    with open(products_file, 'r', encoding='utf-8') as f:
+                        reader = csv.reader(f)
+                        headers = next(reader)
+                        data = []
+                        for row in reader:
+                            if len(row) == len(headers):
+                                data.append(row)
+                            else:
+                                debug_expander.write(f"Skipping malformed row: {row}")
+                        products_df = pd.DataFrame(data, columns=headers)
+                    debug_expander.write(f"Loaded {len(products_df)} products with manual CSV reading")
+                except Exception as e3:
+                    debug_expander.write(f"Manual CSV reading failed: {str(e3)}")
+                    # Create an empty DataFrame with the expected columns
+                    products_df = pd.DataFrame(columns=['title', 'url', 'price', 'original_price', 'rating',
+                                                       'reviews_count', 'availability', 'image_url', 'asin', 'brand'])
     else:
         debug_expander.write("Products file is empty or doesn't exist")
 
     if os.path.exists(urls_file):
-        urls_df = pd.read_csv(urls_file)
+        try:
+            urls_df = pd.read_csv(urls_file)
+        except Exception as e:
+            debug_expander.write(f"Error reading URLs file: {str(e)}")
+            urls_df = pd.DataFrame()
 
     if os.path.exists(links_file):
-        links_df = pd.read_csv(links_file)
+        try:
+            links_df = pd.read_csv(links_file)
+        except Exception as e:
+            debug_expander.write(f"Error reading links file: {str(e)}")
+            links_df = pd.DataFrame()
 except Exception as e:
     st.sidebar.error(f"Error loading data: {str(e)}")
+    products_df = pd.DataFrame()
+    urls_df = pd.DataFrame()
+    links_df = pd.DataFrame()
 
 # Overview tab
 with tabs[0]:
@@ -427,12 +474,49 @@ with tabs[1]:
             max_price = st.number_input("Max Price", min_price, 10000.0, 2000.0, 10.0)
 
         # Apply filters
-        filtered_df = products_df
+        filtered_df = products_df.copy()
+
+        # Debug information about the products dataframe
+        st.sidebar.markdown("### Products DataFrame Info")
+        debug_products = st.sidebar.expander("Show Products DataFrame Info", expanded=False)
+        with debug_products:
+            st.write(f"Products DataFrame Shape: {products_df.shape}")
+            st.write(f"Products DataFrame Columns: {products_df.columns.tolist()}")
+            if not products_df.empty:
+                st.write("First few rows of products_df:")
+                st.dataframe(products_df.head(3))
 
         if 'price' in products_df.columns:
-            # Convert price to numeric
-            filtered_df['price_numeric'] = filtered_df['price'].str.replace('$', '').str.replace(',', '').astype(float)
-            filtered_df = filtered_df[(filtered_df['price_numeric'] >= min_price) & (filtered_df['price_numeric'] <= max_price)]
+            try:
+                # Handle price conversion more robustly
+                def safe_convert_price(price_str):
+                    if pd.isna(price_str) or not isinstance(price_str, str):
+                        return 0.0
+                    # Remove currency symbols and commas
+                    price_str = str(price_str).replace('$', '').replace('£', '').replace('€', '').replace(',', '')
+                    # Extract the first number found
+                    import re
+                    match = re.search(r'(\d+(\.\d+)?)', price_str)
+                    if match:
+                        return float(match.group(1))
+                    return 0.0
+
+                filtered_df['price_numeric'] = filtered_df['price'].apply(safe_convert_price)
+                filtered_df = filtered_df[(filtered_df['price_numeric'] >= min_price) & (filtered_df['price_numeric'] <= max_price)]
+
+                # Show price conversion debug info
+                with debug_products:
+                    if not filtered_df.empty:
+                        st.write("Price conversion examples:")
+                        price_examples = pd.DataFrame({
+                            'original_price': filtered_df['price'].head(5),
+                            'converted_price': filtered_df['price_numeric'].head(5)
+                        })
+                        st.dataframe(price_examples)
+            except Exception as e:
+                st.sidebar.error(f"Error converting prices: {str(e)}")
+                # If price conversion fails, just use the original dataframe
+                filtered_df = products_df.copy()
 
         # Display products
         st.subheader(f"Found {len(filtered_df)} Products")
@@ -456,23 +540,56 @@ with tabs[1]:
         st.markdown(f"Showing products {start_idx+1}-{end_idx} of {len(filtered_df)}")
 
         # Display as cards
-        for i in range(start_idx, end_idx, 3):
-            cols = st.columns(3)
-            for j in range(3):
-                if i + j < end_idx:
-                    product = filtered_df.iloc[i + j]
-                    with cols[j]:
-                        st.markdown(f"<div class='insight-card'>", unsafe_allow_html=True)
-                        if 'image_url' in product and product['image_url']:
-                            st.image(product['image_url'], width=150)
-                        st.markdown(f"**{product['title'][:50]}...**")
-                        if 'price' in product:
-                            st.markdown(f"**Price:** {product['price']}")
-                        if 'rating' in product:
-                            st.markdown(f"**Rating:** {product['rating']} ⭐")
-                        if 'url' in product:
-                            st.markdown(f"[View Product]({product['url']})")
-                        st.markdown("</div>", unsafe_allow_html=True)
+        try:
+            for i in range(start_idx, end_idx, 3):
+                cols = st.columns(3)
+                for j in range(3):
+                    if i + j < end_idx:
+                        try:
+                            product = filtered_df.iloc[i + j]
+                            with cols[j]:
+                                st.markdown(f"<div class='insight-card'>", unsafe_allow_html=True)
+
+                                # Display image if available
+                                if 'image_url' in product and pd.notna(product['image_url']):
+                                    try:
+                                        st.image(product['image_url'], width=150)
+                                    except Exception as img_err:
+                                        st.warning(f"Could not load image")
+
+                                # Display title
+                                if 'title' in product and pd.notna(product['title']):
+                                    title_text = str(product['title'])
+                                    if len(title_text) > 50:
+                                        title_text = title_text[:50] + "..."
+                                    st.markdown(f"**{title_text}**")
+                                else:
+                                    st.markdown("**No title available**")
+
+                                # Display price
+                                if 'price' in product and pd.notna(product['price']):
+                                    st.markdown(f"**Price:** {product['price']}")
+
+                                # Display rating
+                                if 'rating' in product and pd.notna(product['rating']):
+                                    st.markdown(f"**Rating:** {product['rating']} ⭐")
+
+                                # Display link
+                                if 'url' in product and pd.notna(product['url']):
+                                    url = product['url']
+                                    # Make sure URL is valid
+                                    if url.startswith('http'):
+                                        st.markdown(f"[View Product]({url})")
+                                    else:
+                                        st.markdown(f"[View Product](https://www.amazon.com{url})")
+
+                                st.markdown("</div>", unsafe_allow_html=True)
+                        except Exception as card_err:
+                            with cols[j]:
+                                st.error(f"Error displaying product card")
+        except Exception as display_err:
+            st.error(f"Error displaying products: {str(display_err)}")
+            st.info("Try running a new crawl to generate better product data.")
     else:
         st.info("No products found. Start a crawl to see products here.")
 
