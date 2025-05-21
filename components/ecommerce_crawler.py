@@ -549,8 +549,40 @@ class EcommerceCrawler:
         soup = BeautifulSoup(html, 'html.parser')
         results = []
 
-        # Find all product items
-        items = soup.select('.s-result-item[data-asin]:not([data-asin=""])') or soup.select('.sg-col-inner .a-section.a-spacing-medium')
+        # Log the extraction attempt
+        logger.info(f"Attempting to extract products from page")
+
+        # Try multiple selectors to find product items (Amazon changes their HTML structure frequently)
+        selectors = [
+            '.s-result-item[data-asin]:not([data-asin=""])',
+            '.sg-col-inner .a-section.a-spacing-medium',
+            '.s-result-list .s-result-item',
+            '.s-search-results .s-result-item',
+            '.s-main-slot .s-result-item',
+            '[data-component-type="s-search-result"]'
+        ]
+
+        items = []
+        for selector in selectors:
+            items = soup.select(selector)
+            if items:
+                logger.info(f"Found {len(items)} products using selector: {selector}")
+                break
+
+        # If no products found with selectors, try to find any product-like elements
+        if not items:
+            logger.warning("No products found with standard selectors, trying alternative methods")
+            # Look for product titles as a fallback
+            title_elements = soup.select('h2 a span, .a-size-medium.a-color-base.a-text-normal, .a-size-base-plus.a-color-base.a-text-normal')
+            if title_elements:
+                logger.info(f"Found {len(title_elements)} potential products by title elements")
+                # Create synthetic items from title elements
+                items = [elem.parent.parent for elem in title_elements if elem.parent and elem.parent.parent]
+
+        # If this is a product detail page, create a single product item
+        if '/dp/' in str(soup):
+            logger.info("Detected product detail page, extracting single product")
+            items = [soup]  # Use the entire soup as the item
 
         for item in items:
             try:
@@ -560,60 +592,144 @@ class EcommerceCrawler:
                     asin_elem = item.select_one('[data-asin]')
                     if asin_elem:
                         asin = asin_elem.get('data-asin', '')
+                    # Try to extract from URL if on product page
+                    elif '/dp/' in str(item):
+                        asin_match = re.search(r'/dp/([A-Z0-9]{10})', str(item))
+                        if asin_match:
+                            asin = asin_match.group(1)
 
-                # Extract title
+                # Extract title - try multiple selectors
                 title = None
-                title_elem = item.select_one('h2 a span') or item.select_one('.a-size-medium.a-color-base.a-text-normal')
-                if title_elem:
-                    title = title_elem.get_text(strip=True)
+                title_selectors = [
+                    'h2 a span',
+                    '.a-size-medium.a-color-base.a-text-normal',
+                    '.a-size-base-plus.a-color-base.a-text-normal',
+                    '#productTitle',
+                    '.product-title-word-break'
+                ]
 
-                # Extract link
+                for selector in title_selectors:
+                    title_elem = item.select_one(selector)
+                    if title_elem:
+                        title = title_elem.get_text(strip=True)
+                        break
+
+                # Extract link - try multiple selectors
                 link = None
-                link_elem = item.select_one('h2 a') or item.select_one('.a-link-normal.s-no-outline')
-                if link_elem and link_elem.has_attr('href'):
-                    link = link_elem['href']
+                link_selectors = [
+                    'h2 a',
+                    '.a-link-normal.s-no-outline',
+                    '.a-link-normal.s-underline-text',
+                    '.a-link-normal.a-text-normal'
+                ]
 
-                # Extract price
+                for selector in link_selectors:
+                    link_elem = item.select_one(selector)
+                    if link_elem and link_elem.has_attr('href'):
+                        link = link_elem['href']
+                        break
+
+                # If on product page, use current URL
+                if not link and '/dp/' in str(item):
+                    link_match = re.search(r'(https://www\.amazon\.com/[^"\']+/dp/[A-Z0-9]{10}[^"\']*)', str(item))
+                    if link_match:
+                        link = link_match.group(1)
+
+                # Extract price - try multiple selectors
                 price = None
-                price_elem = item.select_one('.a-price .a-offscreen') or item.select_one('.a-price')
-                if price_elem:
-                    price = price_elem.get_text(strip=True)
+                price_selectors = [
+                    '.a-price .a-offscreen',
+                    '.a-price',
+                    '.a-color-price',
+                    '#priceblock_ourprice',
+                    '#priceblock_dealprice',
+                    '.a-price-whole'
+                ]
+
+                for selector in price_selectors:
+                    price_elem = item.select_one(selector)
+                    if price_elem:
+                        price = price_elem.get_text(strip=True)
+                        break
 
                 # Extract original price (if on sale)
                 original_price = None
-                original_price_elem = item.select_one('.a-price.a-text-price .a-offscreen') or item.select_one('.a-price.a-text-price')
-                if original_price_elem:
-                    original_price = original_price_elem.get_text(strip=True)
+                original_price_selectors = [
+                    '.a-price.a-text-price .a-offscreen',
+                    '.a-price.a-text-price',
+                    '.a-text-price'
+                ]
+
+                for selector in original_price_selectors:
+                    original_price_elem = item.select_one(selector)
+                    if original_price_elem:
+                        original_price = original_price_elem.get_text(strip=True)
+                        break
 
                 # Extract rating
                 rating = None
-                rating_elem = item.select_one('i.a-icon-star-small, i.a-icon-star')
-                if rating_elem:
-                    rating_text = rating_elem.get_text(strip=True)
-                    rating_match = re.search(r'(\d+\.\d+|\d+)', rating_text)
-                    if rating_match:
-                        rating = rating_match.group(1)
+                rating_selectors = [
+                    'i.a-icon-star-small',
+                    'i.a-icon-star',
+                    '.a-icon-alt',
+                    '#acrPopover'
+                ]
 
-                # Extract number of reviews
+                for selector in rating_selectors:
+                    rating_elem = item.select_one(selector)
+                    if rating_elem:
+                        rating_text = rating_elem.get_text(strip=True)
+                        rating_match = re.search(r'(\d+\.\d+|\d+)', rating_text)
+                        if rating_match:
+                            rating = rating_match.group(1)
+                            break
+
+                # Extract reviews count
                 reviews_count = None
-                reviews_elem = item.select_one('span[aria-label$="stars"] + span, .a-size-base.s-underline-text')
-                if reviews_elem:
-                    reviews_text = reviews_elem.get_text(strip=True).replace(',', '')
-                    reviews_match = re.search(r'(\d+)', reviews_text)
-                    if reviews_match:
-                        reviews_count = reviews_match.group(1)
+                reviews_selectors = [
+                    'span[aria-label$="stars"] + span',
+                    '.a-size-base.s-underline-text',
+                    '#acrCustomerReviewText',
+                    '.a-link-normal.a-text-normal .a-size-base'
+                ]
 
-                # Extract availability/stock status
+                for selector in reviews_selectors:
+                    reviews_elem = item.select_one(selector)
+                    if reviews_elem:
+                        reviews_text = reviews_elem.get_text(strip=True).replace(',', '')
+                        reviews_match = re.search(r'(\d+)', reviews_text)
+                        if reviews_match:
+                            reviews_count = reviews_match.group(1)
+                            break
+
+                # Extract availability
                 availability = None
-                availability_elem = item.select_one('.a-color-success')
-                if availability_elem:
-                    availability = availability_elem.get_text(strip=True)
+                availability_selectors = [
+                    '.a-color-success',
+                    '#availability',
+                    '.a-color-price'
+                ]
+
+                for selector in availability_selectors:
+                    availability_elem = item.select_one(selector)
+                    if availability_elem:
+                        availability = availability_elem.get_text(strip=True)
+                        break
 
                 # Extract image URL
                 image_url = None
-                img_elem = item.select_one('img.s-image')
-                if img_elem and img_elem.has_attr('src'):
-                    image_url = img_elem['src']
+                image_selectors = [
+                    'img.s-image',
+                    '#landingImage',
+                    '#imgBlkFront',
+                    '.a-dynamic-image'
+                ]
+
+                for selector in image_selectors:
+                    img_elem = item.select_one(selector)
+                    if img_elem and img_elem.has_attr('src'):
+                        image_url = img_elem['src']
+                        break
 
                 if title and link:
                     # Ensure link is absolute
@@ -749,9 +865,25 @@ class EcommerceCrawler:
 
                 # Extract products if it's a search or product page
                 products = []
-                if 's?k=' in current_url or '/dp/' in current_url:
+                # More comprehensive check for product pages
+                is_product_page = any(pattern in current_url for pattern in [
+                    's?k=', '/dp/', '/gp/product/', '/gp/aw/d/', '/product/', '/slp/product/'
+                ])
+
+                if is_product_page:
+                    logger.info(f"Extracting products from {current_url}")
                     products = self.extract_products(html)
-                    self.all_products.extend(products)
+                    logger.info(f"Found {len(products)} products on page")
+
+                    # Only add unique products based on ASIN
+                    existing_asins = {p.get('asin', '') for p in self.all_products}
+                    new_products = [p for p in products if p.get('asin', '') and p.get('asin', '') not in existing_asins]
+
+                    if new_products:
+                        logger.info(f"Adding {len(new_products)} new unique products")
+                        self.all_products.extend(new_products)
+                    else:
+                        logger.info("No new unique products found")
 
                 # Calculate page score based on content value
                 page_score = 0
@@ -836,9 +968,19 @@ class EcommerceCrawler:
                     links_df.to_csv(self.links_file, mode='w', header=True, index=False)
 
                 # Update products file
-                products_df = pd.DataFrame(self.all_products)
-                if not products_df.empty:
-                    products_df.to_csv(self.products_file, mode='w', header=True, index=False)
+                if self.all_products:
+                    try:
+                        logger.info(f"Saving {len(self.all_products)} products to {self.products_file}")
+                        products_df = pd.DataFrame(self.all_products)
+
+                        # Ensure the output directory exists
+                        os.makedirs(os.path.dirname(self.products_file), exist_ok=True)
+
+                        # Save the products to CSV
+                        products_df.to_csv(self.products_file, mode='w', header=True, index=False)
+                        logger.info(f"Successfully saved products to {self.products_file}")
+                    except Exception as e:
+                        logger.error(f"Error saving products to CSV: {str(e)}")
 
                 # Increment page count
                 page_count += 1
@@ -875,13 +1017,44 @@ class EcommerceCrawler:
 
         logger.info(f"Crawl completed. Visited {len(self.visited_urls)} pages, found {len(self.all_products)} products.")
 
+        # Log the paths to the saved files
+        logger.info(f"Products saved to: {self.products_file}")
+        logger.info(f"URLs saved to: {self.urls_file}")
+        logger.info(f"Links saved to: {self.links_file}")
+
+        # Check if files were created successfully
+        products_file_exists = os.path.exists(self.products_file)
+        urls_file_exists = os.path.exists(self.urls_file)
+        links_file_exists = os.path.exists(self.links_file)
+
+        logger.info(f"Products file exists: {products_file_exists}")
+        logger.info(f"URLs file exists: {urls_file_exists}")
+        logger.info(f"Links file exists: {links_file_exists}")
+
+        # Get file sizes
+        products_file_size = os.path.getsize(self.products_file) if products_file_exists else 0
+        urls_file_size = os.path.getsize(self.urls_file) if urls_file_exists else 0
+        links_file_size = os.path.getsize(self.links_file) if links_file_exists else 0
+
+        logger.info(f"Products file size: {products_file_size} bytes")
+        logger.info(f"URLs file size: {urls_file_size} bytes")
+        logger.info(f"Links file size: {links_file_size} bytes")
+
         return {
             'visited_urls': list(self.visited_urls),
             'products': self.all_products,
             'links': self.all_links,
             'pages': self.pages_data,
             'sitemap': sitemap,
-            'graph': graph
+            'graph': graph,
+            'files': {
+                'products_file': self.products_file,
+                'urls_file': self.urls_file,
+                'links_file': self.links_file,
+                'products_file_exists': products_file_exists,
+                'products_file_size': products_file_size,
+                'products_count': len(self.all_products)
+            }
         }
 
     def _calculate_pagerank(self):

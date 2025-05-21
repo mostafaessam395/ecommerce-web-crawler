@@ -228,6 +228,7 @@ def start_crawling():
     # Create progress bar
     progress_bar = st.progress(0)
     status_text = st.empty()
+    debug_info = st.empty()
 
     # Analyze robots.txt if enabled
     if analyze_robots:
@@ -246,19 +247,51 @@ def start_crawling():
     # Start crawling
     status_text.text(f"Crawling for '{query}'...")
 
-    # Run the crawler
-    results = st.session_state.crawler.crawl(
-        query=query,
-        max_pages=max_pages,
-        max_depth=max_depth,
-        delay_range=(min_delay, max_delay)
-    )
+    # Make sure the output directory exists
+    os.makedirs(config['results_dir'], exist_ok=True)
 
-    st.session_state.crawl_results = results
-    st.session_state.crawl_in_progress = False
-    st.session_state.progress = 100
-    progress_bar.progress(100)
-    status_text.text(f"Crawl completed! Visited {len(results['visited_urls'])} pages, found {len(results['products'])} products.")
+    # Log the output directory
+    debug_info.info(f"Output directory: {os.path.abspath(config['results_dir'])}")
+
+    try:
+        # Run the crawler
+        results = st.session_state.crawler.crawl(
+            query=query,
+            max_pages=max_pages,
+            max_depth=max_depth,
+            delay_range=(min_delay, max_delay)
+        )
+
+        st.session_state.crawl_results = results
+
+        # Check if products were found
+        products_count = len(results.get('products', []))
+
+        # Log detailed information about the results
+        debug_info.info(f"Crawl completed with {products_count} products found")
+
+        if 'files' in results:
+            file_info = results['files']
+            debug_info.info(f"Products file: {file_info.get('products_file')}")
+            debug_info.info(f"Products file exists: {file_info.get('products_file_exists')}")
+            debug_info.info(f"Products file size: {file_info.get('products_file_size')} bytes")
+
+        st.session_state.crawl_in_progress = False
+        st.session_state.progress = 100
+        progress_bar.progress(100)
+
+        status_message = f"Crawl completed! Visited {len(results['visited_urls'])} pages, found {products_count} products."
+        status_text.text(status_message)
+
+        # If no products were found, show a warning
+        if products_count == 0:
+            debug_info.warning("No products were found during the crawl. This might be due to Amazon's anti-scraping measures or changes in their HTML structure.")
+            debug_info.info("Try adjusting the crawler settings or using a different search query.")
+
+    except Exception as e:
+        st.session_state.crawl_in_progress = False
+        status_text.error(f"Error during crawl: {str(e)}")
+        debug_info.exception(e)
 
     # Rerun to update the UI
     st.rerun()
@@ -275,14 +308,41 @@ products_df = pd.DataFrame()
 urls_df = pd.DataFrame()
 links_df = pd.DataFrame()
 
-if os.path.exists(os.path.join(config['results_dir'], "_products.csv")):
-    products_df = pd.read_csv(os.path.join(config['results_dir'], "_products.csv"))
+# Define file paths
+products_file = os.path.join(config['results_dir'], "_products.csv")
+urls_file = os.path.join(config['results_dir'], "_urls.csv")
+links_file = os.path.join(config['results_dir'], "_links.csv")
 
-if os.path.exists(os.path.join(config['results_dir'], "_urls.csv")):
-    urls_df = pd.read_csv(os.path.join(config['results_dir'], "_urls.csv"))
+# Log file paths and existence
+st.sidebar.markdown("### Debug Information")
+debug_expander = st.sidebar.expander("Show Data File Info", expanded=False)
+with debug_expander:
+    st.write(f"Products file: {products_file}")
+    st.write(f"Products file exists: {os.path.exists(products_file)}")
+    if os.path.exists(products_file):
+        st.write(f"Products file size: {os.path.getsize(products_file)} bytes")
 
-if os.path.exists(os.path.join(config['results_dir'], "_links.csv")):
-    links_df = pd.read_csv(os.path.join(config['results_dir'], "_links.csv"))
+    st.write(f"URLs file: {urls_file}")
+    st.write(f"URLs file exists: {os.path.exists(urls_file)}")
+
+    st.write(f"Links file: {links_file}")
+    st.write(f"Links file exists: {os.path.exists(links_file)}")
+
+# Try to load the data files
+try:
+    if os.path.exists(products_file) and os.path.getsize(products_file) > 0:
+        products_df = pd.read_csv(products_file)
+        debug_expander.write(f"Loaded {len(products_df)} products")
+    else:
+        debug_expander.write("Products file is empty or doesn't exist")
+
+    if os.path.exists(urls_file):
+        urls_df = pd.read_csv(urls_file)
+
+    if os.path.exists(links_file):
+        links_df = pd.read_csv(links_file)
+except Exception as e:
+    st.sidebar.error(f"Error loading data: {str(e)}")
 
 # Overview tab
 with tabs[0]:
