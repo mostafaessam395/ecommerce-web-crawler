@@ -7,8 +7,19 @@ import plotly.express as px
 import plotly.graph_objects as go
 import networkx as nx
 import os
-from components.ecommerce_crawler import EcommerceCrawler
-from settings import config
+import sys
+from settings import config, is_streamlit_cloud
+
+# Import the appropriate crawler based on the environment
+if is_streamlit_cloud():
+    try:
+        from components.cloud_crawler import CloudCrawler as Crawler
+        st.sidebar.success("Using Cloud-optimized crawler for Streamlit Cloud")
+    except ImportError:
+        from components.ecommerce_crawler import EcommerceCrawler as Crawler
+        st.sidebar.warning("Cloud crawler not available, using standard crawler")
+else:
+    from components.ecommerce_crawler import EcommerceCrawler as Crawler
 
 # Set page configuration
 st.set_page_config(
@@ -64,7 +75,7 @@ st.markdown("""
 
 # Initialize session state
 if 'crawler' not in st.session_state:
-    st.session_state.crawler = EcommerceCrawler(output_dir=config['results_dir'])
+    st.session_state.crawler = Crawler(output_dir=config['results_dir'])
 if 'crawl_results' not in st.session_state:
     st.session_state.crawl_results = None
 if 'crawl_in_progress' not in st.session_state:
@@ -106,6 +117,25 @@ with st.sidebar:
         st.write(f"Results Directory: {config['results_dir']}")
         st.write(f"Save Results: {config['save_results']}")
 
+        # Show crawler information
+        crawler_type = type(st.session_state.crawler).__name__
+        st.write(f"Crawler Type: {crawler_type}")
+
+        if crawler_type == "CloudCrawler":
+            st.success("Using Cloud-optimized crawler that works on Streamlit Cloud")
+            # Show proxy information if available
+            if hasattr(st.session_state.crawler, 'proxies') and st.session_state.crawler.proxies:
+                st.write(f"Using {len(st.session_state.crawler.proxies)} proxies for rotation")
+            else:
+                st.warning("No proxies configured. Amazon may block requests from Streamlit Cloud IP addresses.")
+                st.info("Consider adding proxies to the CloudCrawler.proxies list for better results.")
+        elif crawler_type == "EcommerceCrawler":
+            if is_streamlit_cloud():
+                st.warning("Using standard crawler on Streamlit Cloud. This may not work properly.")
+                st.info("The standard crawler uses Playwright which has limited support on Streamlit Cloud.")
+            else:
+                st.success("Using standard crawler with Playwright for local environment")
+
         # Check if the results directory is writable
         import os
         results_dir = config['results_dir']
@@ -142,6 +172,36 @@ with st.sidebar:
     stealth_mode = st.checkbox("Stealth Mode", config['stealth_mode'])
     analyze_robots = st.checkbox("Analyze Robots.txt", config['analyze_robots'])
     analyze_sitemap = st.checkbox("Analyze Sitemap", config['analyze_sitemap'])
+
+    # Add proxy configuration for CloudCrawler
+    if is_streamlit_cloud() or type(st.session_state.crawler).__name__ == "CloudCrawler":
+        st.subheader("Proxy Configuration")
+        st.info("Amazon may block requests from Streamlit Cloud IP addresses. Adding proxies can help avoid this.")
+
+        # Add proxy input
+        proxy_input = st.text_area(
+            "Add Proxies (one per line, format: http://username:password@ip:port)",
+            height=100,
+            help="Enter one proxy per line in the format http://username:password@ip:port. Free proxies can be found at https://free-proxy-list.net/"
+        )
+
+        # Add button to update proxies
+        if st.button("Update Proxies"):
+            if proxy_input:
+                # Split by newlines and filter out empty lines
+                proxies = [p.strip() for p in proxy_input.split('\n') if p.strip()]
+
+                # Update the crawler's proxies
+                if hasattr(st.session_state.crawler, 'proxies'):
+                    st.session_state.crawler.proxies = proxies
+                    st.success(f"Added {len(proxies)} proxies to the crawler")
+                else:
+                    st.error("Current crawler does not support proxies")
+            else:
+                # Clear proxies if input is empty
+                if hasattr(st.session_state.crawler, 'proxies'):
+                    st.session_state.crawler.proxies = []
+                    st.info("Cleared all proxies from the crawler")
 
     # Save configuration button
     if st.button("Save Configuration"):
