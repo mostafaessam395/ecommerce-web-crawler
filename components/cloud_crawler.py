@@ -695,3 +695,283 @@ class CloudCrawler:
                 'products_count': len(self.all_products)
             }
         }
+
+    def analyze_robots_txt(self):
+        """
+        Analyze robots.txt file for crawlability assessment
+
+        Returns:
+            dict: Dictionary containing robots.txt analysis
+        """
+        logger.info("Analyzing robots.txt file")
+
+        try:
+            # Create a stealth session
+            session = self.create_stealth_session()
+
+            # Fetch robots.txt
+            robots_url = urljoin(self.base_url, '/robots.txt')
+            response = session.get(robots_url, timeout=30)
+
+            if response.status_code != 200:
+                logger.warning(f"Failed to fetch robots.txt: {response.status_code}")
+                return {
+                    'status': 'error',
+                    'message': f"Failed to fetch robots.txt: {response.status_code}",
+                    'crawlability_score': 50,  # Neutral score
+                    'disallowed_paths': [],
+                    'allowed_paths': [],
+                    'sitemaps': [],
+                    'crawl_delay': None
+                }
+
+            # Parse robots.txt content
+            content = response.text
+
+            # Extract disallowed paths
+            disallowed_paths = []
+            for line in content.split('\n'):
+                if line.lower().startswith('disallow:'):
+                    path = line.split(':', 1)[1].strip()
+                    if path:
+                        disallowed_paths.append(path)
+
+            # Extract allowed paths
+            allowed_paths = []
+            for line in content.split('\n'):
+                if line.lower().startswith('allow:'):
+                    path = line.split(':', 1)[1].strip()
+                    if path:
+                        allowed_paths.append(path)
+
+            # Extract sitemaps
+            sitemaps = []
+            for line in content.split('\n'):
+                if line.lower().startswith('sitemap:'):
+                    sitemap_url = line.split(':', 1)[1].strip()
+                    if sitemap_url:
+                        sitemaps.append(sitemap_url)
+
+            # Extract crawl delay
+            crawl_delay = None
+            for line in content.split('\n'):
+                if line.lower().startswith('crawl-delay:'):
+                    try:
+                        crawl_delay = float(line.split(':', 1)[1].strip())
+                    except ValueError:
+                        pass
+
+            # Calculate crawlability score
+            # This is a simple heuristic - more sophisticated scoring could be implemented
+            crawlability_score = 100  # Start with perfect score
+
+            # Penalize for each disallowed path
+            crawlability_score -= min(50, len(disallowed_paths) * 2)
+
+            # Bonus for each allowed path
+            crawlability_score += min(20, len(allowed_paths) * 2)
+
+            # Penalize for crawl delay
+            if crawl_delay:
+                crawlability_score -= min(30, crawl_delay * 5)
+
+            # Bonus for sitemaps
+            crawlability_score += min(10, len(sitemaps) * 5)
+
+            # Ensure score is between 0 and 100
+            crawlability_score = max(0, min(100, crawlability_score))
+
+            # Save the results
+            robots_data = {
+                'status': 'success',
+                'content': content,
+                'crawlability_score': crawlability_score,
+                'disallowed_paths': disallowed_paths,
+                'allowed_paths': allowed_paths,
+                'sitemaps': sitemaps,
+                'crawl_delay': crawl_delay
+            }
+
+            # Save to file if output directory exists
+            try:
+                robots_file = os.path.join(self.output_dir, "_robots.json")
+                with open(robots_file, 'w') as f:
+                    json.dump(robots_data, f, indent=2)
+                logger.info(f"Saved robots.txt analysis to {robots_file}")
+            except Exception as e:
+                logger.error(f"Error saving robots.txt analysis: {str(e)}")
+
+            return robots_data
+
+        except Exception as e:
+            logger.error(f"Error analyzing robots.txt: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'crawlability_score': 0,
+                'disallowed_paths': [],
+                'allowed_paths': [],
+                'sitemaps': [],
+                'crawl_delay': None
+            }
+
+    def analyze_sitemap(self):
+        """
+        Analyze sitemap for content assessment
+
+        Returns:
+            dict: Dictionary containing sitemap analysis
+        """
+        logger.info("Analyzing sitemap")
+
+        try:
+            # Create a stealth session
+            session = self.create_stealth_session()
+
+            # Try to get sitemap URL from robots.txt first
+            robots_data = self.analyze_robots_txt()
+            sitemap_urls = robots_data.get('sitemaps', [])
+
+            # If no sitemaps found in robots.txt, try common sitemap URLs
+            if not sitemap_urls:
+                common_sitemap_paths = [
+                    '/sitemap.xml',
+                    '/sitemap_index.xml',
+                    '/sitemap/sitemap.xml',
+                    '/sitemapindex.xml'
+                ]
+
+                for path in common_sitemap_paths:
+                    sitemap_url = urljoin(self.base_url, path)
+                    response = session.get(sitemap_url, timeout=30)
+
+                    if response.status_code == 200 and '<sitemap' in response.text:
+                        sitemap_urls.append(sitemap_url)
+                        break
+
+            if not sitemap_urls:
+                logger.warning("No sitemaps found")
+                return {
+                    'status': 'error',
+                    'message': "No sitemaps found",
+                    'urls_count': 0,
+                    'content_types': {},
+                    'last_modified_dates': []
+                }
+
+            # Analyze the first sitemap
+            sitemap_url = sitemap_urls[0]
+            logger.info(f"Analyzing sitemap: {sitemap_url}")
+
+            response = session.get(sitemap_url, timeout=30)
+
+            if response.status_code != 200:
+                logger.warning(f"Failed to fetch sitemap: {response.status_code}")
+                return {
+                    'status': 'error',
+                    'message': f"Failed to fetch sitemap: {response.status_code}",
+                    'urls_count': 0,
+                    'content_types': {},
+                    'last_modified_dates': []
+                }
+
+            # Parse sitemap content
+            soup = BeautifulSoup(response.text, 'xml')
+
+            # Check if it's a sitemap index
+            is_sitemap_index = soup.find('sitemapindex') is not None
+
+            urls = []
+            if is_sitemap_index:
+                # Get URLs of individual sitemaps
+                sitemap_tags = soup.find_all('sitemap')
+                for sitemap_tag in sitemap_tags[:3]:  # Limit to first 3 sitemaps
+                    loc_tag = sitemap_tag.find('loc')
+                    if loc_tag:
+                        child_sitemap_url = loc_tag.text.strip()
+                        try:
+                            child_response = session.get(child_sitemap_url, timeout=30)
+                            if child_response.status_code == 200:
+                                child_soup = BeautifulSoup(child_response.text, 'xml')
+                                url_tags = child_soup.find_all('url')
+                                for url_tag in url_tags:
+                                    loc_tag = url_tag.find('loc')
+                                    if loc_tag:
+                                        url = loc_tag.text.strip()
+                                        lastmod_tag = url_tag.find('lastmod')
+                                        lastmod = lastmod_tag.text.strip() if lastmod_tag else None
+                                        urls.append({
+                                            'url': url,
+                                            'lastmod': lastmod
+                                        })
+                        except Exception as e:
+                            logger.error(f"Error fetching child sitemap {child_sitemap_url}: {str(e)}")
+            else:
+                # Get URLs directly from sitemap
+                url_tags = soup.find_all('url')
+                for url_tag in url_tags:
+                    loc_tag = url_tag.find('loc')
+                    if loc_tag:
+                        url = loc_tag.text.strip()
+                        lastmod_tag = url_tag.find('lastmod')
+                        lastmod = lastmod_tag.text.strip() if lastmod_tag else None
+                        urls.append({
+                            'url': url,
+                            'lastmod': lastmod
+                        })
+
+            # Analyze content types
+            content_types = {}
+            for url_data in urls[:20]:  # Limit to first 20 URLs
+                url = url_data['url']
+                try:
+                    # Try to determine content type from URL pattern
+                    if '/product/' in url or '/dp/' in url:
+                        content_type = 'product'
+                    elif '/category/' in url or '/s?' in url:
+                        content_type = 'category'
+                    elif '/blog/' in url or '/article/' in url:
+                        content_type = 'blog'
+                    else:
+                        content_type = 'other'
+
+                    content_types[content_type] = content_types.get(content_type, 0) + 1
+                except Exception as e:
+                    logger.error(f"Error analyzing content type for {url}: {str(e)}")
+
+            # Extract last modified dates
+            last_modified_dates = []
+            for url_data in urls:
+                if url_data.get('lastmod'):
+                    last_modified_dates.append(url_data['lastmod'])
+
+            # Save the results
+            sitemap_data = {
+                'status': 'success',
+                'sitemap_url': sitemap_url,
+                'is_sitemap_index': is_sitemap_index,
+                'urls_count': len(urls),
+                'content_types': content_types,
+                'last_modified_dates': last_modified_dates[:10]  # Limit to first 10 dates
+            }
+
+            # Save to file if output directory exists
+            try:
+                sitemap_file = os.path.join(self.output_dir, "_sitemap.json")
+                with open(sitemap_file, 'w') as f:
+                    json.dump(sitemap_data, f, indent=2)
+                logger.info(f"Saved sitemap analysis to {sitemap_file}")
+            except Exception as e:
+                logger.error(f"Error saving sitemap analysis: {str(e)}")
+
+            return sitemap_data
+
+        except Exception as e:
+            logger.error(f"Error analyzing sitemap: {str(e)}")
+            return {
+                'status': 'error',
+                'message': str(e),
+                'urls_count': 0,
+                'content_types': {},
+                'last_modified_dates': []
+            }

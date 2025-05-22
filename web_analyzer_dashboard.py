@@ -349,16 +349,36 @@ def start_crawling():
     # Analyze robots.txt if enabled
     if analyze_robots:
         status_text.text("Analyzing robots.txt...")
-        st.session_state.robots_data = st.session_state.crawler.analyze_robots_txt()
-        st.session_state.progress = 10
-        progress_bar.progress(st.session_state.progress)
+        try:
+            if hasattr(st.session_state.crawler, 'analyze_robots_txt'):
+                st.session_state.robots_data = st.session_state.crawler.analyze_robots_txt()
+                st.session_state.progress = 10
+                progress_bar.progress(st.session_state.progress)
+            else:
+                debug_info.warning("Robots.txt analysis not available for this crawler")
+                st.session_state.progress = 10
+                progress_bar.progress(st.session_state.progress)
+        except Exception as e:
+            debug_info.error(f"Error analyzing robots.txt: {str(e)}")
+            st.session_state.progress = 10
+            progress_bar.progress(st.session_state.progress)
 
     # Analyze sitemap if enabled
     if analyze_sitemap:
         status_text.text("Analyzing sitemap...")
-        st.session_state.sitemap_data = st.session_state.crawler.analyze_sitemap()
-        st.session_state.progress = 20
-        progress_bar.progress(st.session_state.progress)
+        try:
+            if hasattr(st.session_state.crawler, 'analyze_sitemap'):
+                st.session_state.sitemap_data = st.session_state.crawler.analyze_sitemap()
+                st.session_state.progress = 20
+                progress_bar.progress(st.session_state.progress)
+            else:
+                debug_info.warning("Sitemap analysis not available for this crawler")
+                st.session_state.progress = 20
+                progress_bar.progress(st.session_state.progress)
+        except Exception as e:
+            debug_info.error(f"Error analyzing sitemap: {str(e)}")
+            st.session_state.progress = 20
+            progress_bar.progress(st.session_state.progress)
 
     # Start crawling
     status_text.text(f"Crawling for '{query}'...")
