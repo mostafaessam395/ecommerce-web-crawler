@@ -1037,56 +1037,98 @@ with tabs[3]:
 with tabs[4]:
     st.header("Crawl Timeline")
 
-    if not urls_df.empty and 'crawled_at' in urls_df.columns:
-        # Convert crawled_at to datetime
-        urls_df['crawled_at'] = pd.to_datetime(urls_df['crawled_at'])
+    if not urls_df.empty and 'crawled_at' in urls_df.columns and 'latency' in urls_df.columns:
+        try:
+            # Convert crawled_at to datetime
+            urls_df['crawled_at'] = pd.to_datetime(urls_df['crawled_at'], errors='coerce')
 
-        # Sort by crawled_at
-        urls_df_sorted = urls_df.sort_values('crawled_at')
+            # Drop rows with invalid dates
+            urls_df = urls_df.dropna(subset=['crawled_at'])
 
-        # Create timeline
-        fig = px.scatter(
-            urls_df_sorted,
-            x='crawled_at',
-            y='latency',
-            color='response_code',
-            hover_name='title',
-            size='size',
-            title="Crawl Timeline",
-            labels={
-                'crawled_at': 'Time',
-                'latency': 'Response Time (s)',
-                'response_code': 'HTTP Status',
-                'size': 'Page Size'
-            }
-        )
-        fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='white'),
-            xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
-        )
-        st.plotly_chart(fig, use_container_width=True)
+            if urls_df.empty:
+                st.info("No valid crawl data found. Start a crawl to see timeline information.")
+            else:
+                # Sort by crawled_at
+                urls_df_sorted = urls_df.sort_values('crawled_at')
 
-        # Response time distribution
-        st.subheader("Response Time Distribution")
-        fig = px.histogram(
-            urls_df,
-            x='latency',
-            nbins=20,
-            title="Response Time Distribution",
-            labels={'latency': 'Response Time (s)'},
-            color_discrete_sequence=['#FF9900']
-        )
-        fig.update_layout(
-            plot_bgcolor='rgba(0,0,0,0)',
-            paper_bgcolor='rgba(0,0,0,0)',
-            font=dict(color='white'),
-            xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
-            yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
-        )
-        st.plotly_chart(fig, use_container_width=True)
+                # Check if we have the required columns for the scatter plot
+                required_columns = ['crawled_at', 'latency']
+                if not all(col in urls_df_sorted.columns for col in required_columns):
+                    st.warning(f"Missing required columns for timeline visualization. Required: {required_columns}")
+                else:
+                    # Check if we have response_code for coloring
+                    color_column = 'response_code' if 'response_code' in urls_df_sorted.columns else None
+
+                    # Check if we have title for hover
+                    hover_column = 'title' if 'title' in urls_df_sorted.columns else None
+
+                    # Check if we have size column, if not create a constant size
+                    if 'size' not in urls_df_sorted.columns:
+                        # Add a constant size column
+                        urls_df_sorted['size_value'] = 10
+                        size_column = 'size_value'
+                    else:
+                        size_column = 'size'
+
+                    # Create scatter plot parameters
+                    scatter_params = {
+                        'data_frame': urls_df_sorted,
+                        'x': 'crawled_at',
+                        'y': 'latency',
+                        'title': "Crawl Timeline",
+                        'labels': {
+                            'crawled_at': 'Time',
+                            'latency': 'Response Time (s)'
+                        }
+                    }
+
+                    # Add optional parameters if columns exist
+                    if color_column:
+                        scatter_params['color'] = color_column
+                        scatter_params['labels'][color_column] = 'HTTP Status'
+
+                    if hover_column:
+                        scatter_params['hover_name'] = hover_column
+
+                    if size_column:
+                        scatter_params['size'] = size_column
+                        scatter_params['labels'][size_column] = 'Page Size'
+
+                    # Create timeline
+                    fig = px.scatter(**scatter_params)
+
+                    # Update layout
+                    fig.update_layout(
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        font=dict(color='white'),
+                        xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                        yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Response time distribution
+                    st.subheader("Response Time Distribution")
+                    if 'latency' in urls_df.columns:
+                        fig = px.histogram(
+                            urls_df,
+                            x='latency',
+                            nbins=20,
+                            title="Response Time Distribution",
+                            labels={'latency': 'Response Time (s)'},
+                            color_discrete_sequence=['#FF9900']
+                        )
+                        fig.update_layout(
+                            plot_bgcolor='rgba(0,0,0,0)',
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            font=dict(color='white'),
+                            xaxis=dict(gridcolor='rgba(255,255,255,0.1)'),
+                            yaxis=dict(gridcolor='rgba(255,255,255,0.1)')
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+        except Exception as e:
+            st.error(f"Error creating timeline visualization: {str(e)}")
+            st.info("Try running a new crawl to generate better data.")
     else:
         st.info("No crawl data found. Start a crawl to see timeline information.")
 
