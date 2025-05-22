@@ -76,6 +76,16 @@ if 'robots_data' not in st.session_state:
 if 'sitemap_data' not in st.session_state:
     st.session_state.sitemap_data = None
 
+# Add in-memory storage for Streamlit Cloud
+if 'products_data' not in st.session_state:
+    st.session_state.products_data = []
+
+if 'urls_data' not in st.session_state:
+    st.session_state.urls_data = []
+
+if 'links_data' not in st.session_state:
+    st.session_state.links_data = []
+
 # Title and description
 st.title("🔍 Enhanced E-commerce Crawler & Analyzer")
 st.markdown("""
@@ -324,6 +334,19 @@ def start_crawling():
         # Log detailed information about the results
         debug_info.info(f"Crawl completed with {products_count} products found")
 
+        # Store results in session state for Streamlit Cloud
+        if products_count > 0:
+            st.session_state.products_data = results.get('products', [])
+            debug_info.success(f"Stored {len(st.session_state.products_data)} products in session state")
+
+        if 'visited_urls' in results:
+            st.session_state.urls_data = [{'url': url} for url in results.get('visited_urls', [])]
+            debug_info.success(f"Stored {len(st.session_state.urls_data)} URLs in session state")
+
+        if 'links' in results:
+            st.session_state.links_data = results.get('links', [])
+            debug_info.success(f"Stored {len(st.session_state.links_data)} links in session state")
+
         if 'files' in results:
             file_info = results['files']
             debug_info.info(f"Products file: {file_info.get('products_file')}")
@@ -382,68 +405,98 @@ with debug_expander:
     st.write(f"Links file: {links_file}")
     st.write(f"Links file exists: {os.path.exists(links_file)}")
 
-# Try to load the data files
-try:
-    if os.path.exists(products_file) and os.path.getsize(products_file) > 0:
-        try:
-            # Try to read with standard settings first
-            products_df = pd.read_csv(products_file)
-            debug_expander.write(f"Loaded {len(products_df)} products with standard settings")
-        except Exception as e1:
-            debug_expander.write(f"Standard CSV reading failed: {str(e1)}")
+    # Show session state data
+    st.write("### Session State Data")
+    st.write(f"Products in session state: {len(st.session_state.products_data)}")
+    st.write(f"URLs in session state: {len(st.session_state.urls_data)}")
+    st.write(f"Links in session state: {len(st.session_state.links_data)}")
+
+    # Show a sample of products in session state
+    if len(st.session_state.products_data) > 0:
+        st.write("Sample product from session state:")
+        st.json(st.session_state.products_data[0])
+
+# Check if we have data in session state (for Streamlit Cloud)
+if len(st.session_state.products_data) > 0:
+    debug_expander.write(f"Using {len(st.session_state.products_data)} products from session state")
+    products_df = pd.DataFrame(st.session_state.products_data)
+
+if len(st.session_state.urls_data) > 0:
+    debug_expander.write(f"Using {len(st.session_state.urls_data)} URLs from session state")
+    urls_df = pd.DataFrame(st.session_state.urls_data)
+
+if len(st.session_state.links_data) > 0:
+    debug_expander.write(f"Using {len(st.session_state.links_data)} links from session state")
+    links_df = pd.DataFrame(st.session_state.links_data)
+
+# If session state is empty, try to load from files
+if products_df.empty or urls_df.empty or links_df.empty:
+    debug_expander.write("Session state data not available, trying to load from files")
+    try:
+        if os.path.exists(products_file) and os.path.getsize(products_file) > 0:
             try:
-                # Try with more robust error handling
-                products_df = pd.read_csv(
-                    products_file,
-                    error_bad_lines=False,  # Skip bad lines
-                    warn_bad_lines=True,    # Warn about bad lines
-                    quoting=1,              # Quote all fields
-                    escapechar='\\',        # Use backslash as escape character
-                    on_bad_lines='skip'     # Skip bad lines (pandas 1.3+)
-                )
-                debug_expander.write(f"Loaded {len(products_df)} products with robust settings")
-            except Exception as e2:
-                debug_expander.write(f"Robust CSV reading also failed: {str(e2)}")
-                # Last resort: read the file manually
+                # Try to read with standard settings first
+                products_df = pd.read_csv(products_file)
+                debug_expander.write(f"Loaded {len(products_df)} products with standard settings")
+            except Exception as e1:
+                debug_expander.write(f"Standard CSV reading failed: {str(e1)}")
                 try:
-                    import csv
-                    with open(products_file, 'r', encoding='utf-8') as f:
-                        reader = csv.reader(f)
-                        headers = next(reader)
-                        data = []
-                        for row in reader:
-                            if len(row) == len(headers):
-                                data.append(row)
-                            else:
-                                debug_expander.write(f"Skipping malformed row: {row}")
-                        products_df = pd.DataFrame(data, columns=headers)
-                    debug_expander.write(f"Loaded {len(products_df)} products with manual CSV reading")
-                except Exception as e3:
-                    debug_expander.write(f"Manual CSV reading failed: {str(e3)}")
-                    # Create an empty DataFrame with the expected columns
-                    products_df = pd.DataFrame(columns=['title', 'url', 'price', 'original_price', 'rating',
-                                                       'reviews_count', 'availability', 'image_url', 'asin', 'brand'])
-    else:
-        debug_expander.write("Products file is empty or doesn't exist")
+                    # Try with more robust error handling
+                    products_df = pd.read_csv(
+                        products_file,
+                        error_bad_lines=False,  # Skip bad lines
+                        warn_bad_lines=True,    # Warn about bad lines
+                        quoting=1,              # Quote all fields
+                        escapechar='\\',        # Use backslash as escape character
+                        on_bad_lines='skip'     # Skip bad lines (pandas 1.3+)
+                    )
+                    debug_expander.write(f"Loaded {len(products_df)} products with robust settings")
+                except Exception as e2:
+                    debug_expander.write(f"Robust CSV reading also failed: {str(e2)}")
+                    # Last resort: read the file manually
+                    try:
+                        import csv
+                        with open(products_file, 'r', encoding='utf-8') as f:
+                            reader = csv.reader(f)
+                            headers = next(reader)
+                            data = []
+                            for row in reader:
+                                if len(row) == len(headers):
+                                    data.append(row)
+                                else:
+                                    debug_expander.write(f"Skipping malformed row: {row}")
+                            products_df = pd.DataFrame(data, columns=headers)
+                        debug_expander.write(f"Loaded {len(products_df)} products with manual CSV reading")
+                    except Exception as e3:
+                        debug_expander.write(f"Manual CSV reading failed: {str(e3)}")
+                        # Create an empty DataFrame with the expected columns
+                        products_df = pd.DataFrame(columns=['title', 'url', 'price', 'original_price', 'rating',
+                                                        'reviews_count', 'availability', 'image_url', 'asin', 'brand'])
+        else:
+            debug_expander.write("Products file is empty or doesn't exist")
 
-    if os.path.exists(urls_file):
-        try:
-            urls_df = pd.read_csv(urls_file)
-        except Exception as e:
-            debug_expander.write(f"Error reading URLs file: {str(e)}")
+        if os.path.exists(urls_file):
+            try:
+                urls_df = pd.read_csv(urls_file)
+            except Exception as e:
+                debug_expander.write(f"Error reading URLs file: {str(e)}")
+                urls_df = pd.DataFrame()
+
+        if os.path.exists(links_file):
+            try:
+                links_df = pd.read_csv(links_file)
+            except Exception as e:
+                debug_expander.write(f"Error reading links file: {str(e)}")
+                links_df = pd.DataFrame()
+    except Exception as e:
+        st.sidebar.error(f"Error loading data: {str(e)}")
+        if products_df.empty:
+            products_df = pd.DataFrame(columns=['title', 'url', 'price', 'original_price', 'rating',
+                                            'reviews_count', 'availability', 'image_url', 'asin', 'brand'])
+        if urls_df.empty:
             urls_df = pd.DataFrame()
-
-    if os.path.exists(links_file):
-        try:
-            links_df = pd.read_csv(links_file)
-        except Exception as e:
-            debug_expander.write(f"Error reading links file: {str(e)}")
+        if links_df.empty:
             links_df = pd.DataFrame()
-except Exception as e:
-    st.sidebar.error(f"Error loading data: {str(e)}")
-    products_df = pd.DataFrame()
-    urls_df = pd.DataFrame()
-    links_df = pd.DataFrame()
 
 # Overview tab
 with tabs[0]:
