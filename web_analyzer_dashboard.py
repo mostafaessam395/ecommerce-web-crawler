@@ -2,6 +2,16 @@
 Enhanced E-commerce Dashboard with advanced visualizations and insights panel
 """
 import streamlit as st
+
+# Set page configuration - MUST BE THE FIRST STREAMLIT COMMAND
+st.set_page_config(
+    page_title="Enhanced E-commerce Crawler & Analyzer",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Now import other libraries
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -11,23 +21,19 @@ import sys
 from settings import config, is_streamlit_cloud
 
 # Import the appropriate crawler based on the environment
-if is_streamlit_cloud():
-    try:
-        from components.cloud_crawler import CloudCrawler as Crawler
-        st.sidebar.success("Using Cloud-optimized crawler for Streamlit Cloud")
-    except ImportError:
-        from components.ecommerce_crawler import EcommerceCrawler as Crawler
-        st.sidebar.warning("Cloud crawler not available, using standard crawler")
-else:
-    from components.ecommerce_crawler import EcommerceCrawler as Crawler
-
-# Set page configuration
-st.set_page_config(
-    page_title="Enhanced E-commerce Crawler & Analyzer",
-    page_icon="🔍",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# We'll do this after the page is set up to avoid Streamlit errors
+def get_crawler():
+    """Get the appropriate crawler based on the environment"""
+    if is_streamlit_cloud():
+        try:
+            from components.cloud_crawler import CloudCrawler
+            return CloudCrawler
+        except ImportError:
+            from components.ecommerce_crawler import EcommerceCrawler
+            return EcommerceCrawler
+    else:
+        from components.ecommerce_crawler import EcommerceCrawler
+        return EcommerceCrawler
 
 # Custom CSS for better appearance
 st.markdown("""
@@ -75,7 +81,16 @@ st.markdown("""
 
 # Initialize session state
 if 'crawler' not in st.session_state:
-    st.session_state.crawler = Crawler(output_dir=config['results_dir'])
+    # Get the appropriate crawler class
+    CrawlerClass = get_crawler()
+    st.session_state.crawler = CrawlerClass(output_dir=config['results_dir'])
+
+    # Show crawler information (after initialization)
+    crawler_type = type(st.session_state.crawler).__name__
+    if crawler_type == "CloudCrawler":
+        st.sidebar.success("Using Cloud-optimized crawler for Streamlit Cloud")
+    elif crawler_type == "EcommerceCrawler" and is_streamlit_cloud():
+        st.sidebar.warning("Cloud crawler not available, using standard crawler")
 if 'crawl_results' not in st.session_state:
     st.session_state.crawl_results = None
 if 'crawl_in_progress' not in st.session_state:
