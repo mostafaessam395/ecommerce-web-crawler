@@ -87,6 +87,37 @@ and provide insights on crawlability and content. Use the controls below to conf
 with st.sidebar:
     st.header("Crawler Configuration")
 
+    # Display environment and configuration information
+    env_expander = st.expander("Environment Info", expanded=False)
+    with env_expander:
+        from settings import ENVIRONMENT, is_streamlit_cloud
+        st.write(f"Current Environment: {ENVIRONMENT}")
+        st.write(f"Running on Streamlit Cloud: {is_streamlit_cloud()}")
+        st.write(f"Results Directory: {config['results_dir']}")
+        st.write(f"Save Results: {config['save_results']}")
+
+        # Check if the results directory is writable
+        import os
+        results_dir = config['results_dir']
+        if not os.path.exists(results_dir):
+            try:
+                os.makedirs(results_dir, exist_ok=True)
+                st.success(f"Created results directory: {results_dir}")
+            except Exception as e:
+                st.error(f"Error creating results directory: {str(e)}")
+        else:
+            st.success(f"Results directory exists: {results_dir}")
+
+        # Check if we can write to the results directory
+        try:
+            test_file = os.path.join(results_dir, "test_write.txt")
+            with open(test_file, 'w') as f:
+                f.write("Test write")
+            os.remove(test_file)
+            st.success(f"Results directory is writable")
+        except Exception as e:
+            st.error(f"Results directory is not writable: {str(e)}")
+
     query = st.text_input("Search Query", "laptop")
     max_pages = st.slider("Maximum Pages to Crawl", 5, 100, config['max_pages'])
     max_depth = st.slider("Maximum Depth", 1, 5, config['max_depth'])
@@ -248,10 +279,33 @@ def start_crawling():
     status_text.text(f"Crawling for '{query}'...")
 
     # Make sure the output directory exists
-    os.makedirs(config['results_dir'], exist_ok=True)
+    try:
+        results_dir = config['results_dir']
+        os.makedirs(results_dir, exist_ok=True)
+        debug_info.success(f"Created/verified output directory: {os.path.abspath(results_dir)}")
 
-    # Log the output directory
-    debug_info.info(f"Output directory: {os.path.abspath(config['results_dir'])}")
+        # Test if the directory is writable
+        test_file = os.path.join(results_dir, "test_write.txt")
+        with open(test_file, 'w') as f:
+            f.write("Test write")
+        os.remove(test_file)
+        debug_info.success(f"Output directory is writable")
+
+        # Log the output directory
+        debug_info.info(f"Output directory: {os.path.abspath(results_dir)}")
+
+        # For Streamlit Cloud, ensure the crawler uses the correct output directory
+        from settings import ENVIRONMENT
+        if ENVIRONMENT == 'streamlit_cloud':
+            st.session_state.crawler.output_dir = results_dir
+            st.session_state.crawler.urls_file = os.path.join(results_dir, "_urls.csv")
+            st.session_state.crawler.links_file = os.path.join(results_dir, "_links.csv")
+            st.session_state.crawler.products_file = os.path.join(results_dir, "_products.csv")
+            st.session_state.crawler.robots_file = os.path.join(results_dir, "_robots.json")
+            debug_info.info(f"Updated crawler output paths for Streamlit Cloud")
+            debug_info.info(f"Products will be saved to: {st.session_state.crawler.products_file}")
+    except Exception as e:
+        debug_info.error(f"Error setting up output directory: {str(e)}")
 
     try:
         # Run the crawler
